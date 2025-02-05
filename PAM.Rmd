@@ -1,7 +1,7 @@
 ---
-title: "PAM"
-author: "Thomas Wilschut"
-date: "2025-01-27"
+title: "Correlations between PAM & SGMA / MemoryLab's Memory Index"
+author: "Thomas Wilschut & Hedderik van Rijn"
+date: "2025-01-27 - 2025-02-05"
 output:
   html_document:
     smart: true
@@ -66,7 +66,7 @@ colnames(pam)[colnames(pam) == 'group.x'] <- 'group'
 rm(dat)
 ```
 
-Here, we will examine the relationship between levels of PAM (peptidylglycine-α-amidating monooxygenas) and memory function as measured by the MI. From PAM theragnostics website:' PAM enzyme is the only known enzyme to catalyze the formation of c‑terminally amidated peptide hormones for gaining their biological activity. Already several decades ago, the connection between the diverse human pathologies and the level of α-amidation has been made. Thus, the increase of the PAM amidating activity could be directly linked to the presence or potential development of the medullary thyroid carcinoma, neuroendocrine and pancreatic endocrine tumors, insulin induced hypoglycemia, type 2 diabetes, multiple sclerosis, post-polio syndrome, diverse neural disfunction (Bousquet-Moore et al., 2010), hypertension (Shimosawa et al., 2000), Alzheimer´s disease (Wand et al. 1987) and many others.' This means that we would expect a negative relationship between PAM levels and memory function.
+Here, we will examine the relationship between levels of PAM (peptidylglycine-α-amidating monooxygenas) and memory function as measured by the MI. From PAM theragnostics website:' PAM enzyme is the only known enzyme to catalyze the formation of c‑terminally amidated peptide hormones for gaining their biological activity. Already several decades ago, the connection between the diverse human pathologies and the level of α-amidation has been made. Thus, the increase of the PAM amidating activity could be directly linked to the presence or potential development of the medullary thyroid carcinoma, neuroendocrine and pancreatic endocrine tumors, insulin induced hypoglycemia, type 2 diabetes, multiple sclerosis, post-polio syndrome, diverse neural disfunction (Bousquet-Moore et al., 2010), hypertension (Shimosawa et al., 2000), Alzheimer´s disease (Wand et al. 1987) and many others.' *This means that we would expect a negative relationship between PAM levels and memory function.*
 
 The following variables of interest are available in the dataset:
 
@@ -80,12 +80,14 @@ The following variables of interest are available in the dataset:
 
 We also have access to variables that usually correlate strongly with vascular health and inflammation: bmi, hba1 and crp.
 
-There is a few version of the memory index we are testing here:
+There are a few versions of the memory index we are testing here:
  
- mi_raw: the raw, uncorrected memory index. 
- mi: the topic-difficulty corrected memory index.
- mi_demo_corrected: the memory index corrected for age, education, gender (but not topic)
- mi_corrected: the memory index corrected for age, education, and topic
+* mi_raw: the raw, uncorrected memory index. 
+* mi: the topic-difficulty corrected memory index.
+* mi_demo_corrected: the memory index corrected for age, education, gender (but not topic)
+* mi_corrected: the memory index corrected for age, education, and topic
+
+Note that results should be similar for the mi_demo_corrected and mi_corrected. 
 
 # Distributions and transformations
 
@@ -202,7 +204,7 @@ b <- create_correlation_plot(correlations)
 b
 ```
 
-Here, we do find a few correlations that are near significance. More specifically, PAM units (according to Jip: the key PAM activity marker) seem to be negatively correlated with MI and with corrected MI. This means that higher PAM activity is associated with lower memory performance. This is in line with the literature, as PAM is often associated with vascular health and inflammation, which are known to negatively affect cognitive function. In addition, pam level seems to be negatively correlated with the corrected MI.
+Here, we do find a few correlations that reach significance. More specifically, PAM units  seem to be negatively correlated with MI and with corrected MI. This means that higher PAM activity is associated with lower memory performance. This is in line with the literature, as PAM is often associated with vascular health and inflammation, which are known to negatively affect cognitive function. In addition, pam level seems to be negatively correlated with the corrected MI.
 
 Let's create a scatter plot to visualize this relationship:
 ```{r}
@@ -214,10 +216,15 @@ ggplot(donors, aes(x = mi_demo_corrected, y = pam_units_edta)) +
        y = "PAM activity")
 ```
 
-How many observations are there?
+For how many donors do we have data?
 
 ```{r}
 sum(!is.na(donors$pam_units_edta))
+```
+
+And for how many recipients?
+
+```{r}
 sum(!is.na(recipients$pam_units_edta))
 ```
 
@@ -249,20 +256,21 @@ Let's look at the relationship between PAM activity and time since the lab measu
 ```{r}
 # contrast code group:
 pam$group <- factor(pam$group, levels = c("donor", "receiver"))
-pam$group_contrast <- ifelse(pam$group == "donor", 1, -1)
+## Take care of the unbalanced number of cases in the groups:
+pam$group_contrast <- ifelse(pam$group == "donor", mean(pam$group=="donor")/2, -(1-mean(pam$group=="donor"))/2)
 # raw memory index:
 m1 <- lm(pam_units_edta ~ mi_raw * group_contrast * years_elapsed, data = pam)
 summary(m1)
 ```
 
-The first model shows that there is an effect of MI on the PAM activity. We also see the inspected interaction between mi and years_elapsed, which is significant. This means that the relationship between PAM activity and MI becomes weaker (i.e., less negative) as the blood test has been completed a longer tome ago.
+The first model shows that there is an effect of MI on the PAM activity. We also see the inspected interaction between mi and years_elapsed, which is significant. This means that the relationship between PAM activity and MI becomes weaker (i.e., less negative) as the blood test has been completed a longer time ago.
 
 Next, we see if we can predict the memory index using PAM activity:
 ```{r}
 m2 <- lm(mi_raw ~ pam_units_edta * group_contrast * years_elapsed, data = pam)
 summary(m2)
 ```
-The effects are the qualitatively similar, but weaker. 
+The effects are qualitatively similar, but weaker. 
 
 Next, we will do the same for the MI score that was corrected age, education, gender:
 
@@ -282,6 +290,9 @@ summary(m4)
 
 We find no significant results anymore. 
 
+# Patterns in the data
+
+There seem to be strong effects of years_elapsed. Is that something to take into account?
 
 Let's check for a relationship between age at the moment of MI test, and the years since the lab measurements were taken:
 
@@ -289,13 +300,20 @@ Let's check for a relationship between age at the moment of MI test, and the yea
 cor.test(pam$age, pam$years_elapsed)
 ```
 
+There seems to be no effect on age of the number of years elapsed since the bloodsample was taken. (Which could reflect that more recently taken samples are older/younger participants.)
+
 Is there a correlation between PAM activity and the age of the test?
 ```{r}
 cor.test(pam$years_elapsed, pam$pam_units_edta)
- 
+```
+
+And just for the donors?
+
+```{r}
 donors <- pam %>% filter(group == 'donor')
 cor.test(donors$years_elapsed, donors$pam_units_edta)
 ```
+
 
 ```{r}
 ggplot(pam, aes(x = dat, y = pam_units_edta)) +
@@ -306,7 +324,7 @@ ggplot(pam, aes(x = dat, y = pam_units_edta)) +
        y = "PAM activity")
 ```
 
-Pam generally seems to increase with time since the lab measurements were taken. There is no evidence for a relationship between age and years_elapsed, but there is a negative correlation between the age of the test and the PAM activity. This correlation is especially strong for donors. That is a bit weird. Did people with higher PAM generally do their test more quickly? 
+PAM generally seems to increase with time since the lab measurements were taken. There is no evidence for a relationship between age and years_elapsed, but there is a negative correlation between the age of the test and the PAM activity. This correlation is especially strong for donors. That is a bit weird. Did people with higher PAM generally do their test more recently? Did the assessment method change?
 
 Let's see if we can visualize the relationship between PAM activity and MI, as a function of the time since the lab measurement, to get a better idea of what is going on.
 
@@ -339,11 +357,13 @@ It seems like the later measurements show a weaker correlation, both for the cor
 m6 <- lm(mi_raw ~ pam_units_edta, data = pam %>% filter(group == 'donor' & years_elapsed_group == '2-4'))
 summary(m6)
 
+## Change the next analysis to one sided:
 m7 <- lm(mi_demo_corrected ~ pam_units_edta, data = pam %>% filter(group == 'donor' & years_elapsed_group == '2-4'))
 summary(m7)
 ```
 
-The raw MI is significant, the corrected MI is not.
+The raw MI is significant, the corrected MI would be significant if tested one-sided (which would be 
+reasonable given the clear hypothesis), but not in the "default" two-sided manner.
 
 
 
