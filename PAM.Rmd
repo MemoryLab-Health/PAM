@@ -35,6 +35,7 @@ library(knitr)
 library(corrplot)
 library(kableExtra)
 library(readxl)
+library(patchwork)
 ```
 
 # 1 Load data
@@ -78,6 +79,13 @@ The following variables of interest are available in the dataset:
 * bio_adm_edta: biologically active adrenomedullin (bio-ADM) levels in plasma samples, measured in EDTA plasma. Bio-ADM refers to the fraction of adrenomedullin that is biologically functional and capable of exerting its physiological effects (like vasodilation or influencing vascular integrity).
 
 We also have access to variables that usually correlate strongly with vascular health and inflammation: bmi, hba1 and crp.
+
+There is a few version of the memory index we are testing here:
+ 
+ mi_raw: the raw, uncorrected memory index. 
+ mi: the topic-difficulty corrected memory index.
+ mi_demo_corrected: the memory index corrected for age, education, gender (but not topic)
+ mi_corrected: the memory index corrected for age, education, and topic
 
 # Distributions and transformations
 
@@ -144,8 +152,43 @@ all <- pam %>% dplyr::select(-group, -algdat)
 # all
 correlations <- cor(all, use = "pairwise.complete.obs")
 stats <- cor.mtest(all, conf.level = 0.95)
-corrplot(correlations, method = "color", type = 'upper', p.mat = stats$p, sig.level = 0.05, number.cex=0.75,  addCoef.col = "black", 
-         col = colorRampPalette(c("red", "white", "forestgreen"))(100))
+
+# wrap in a function
+
+create_correlation_plot  <- function (corr) {
+# create tile plot with sign stars:
+nm = rownames(corr)
+m = t(combn(nm, 2))
+d = cbind(data.frame(m), R = corr[m], P = stats$p[m])
+d$label = round(d$R, 2)
+
+# add significance stars, based on the highest significance level:
+d <- d %>% mutate(label = ifelse(P < 0.01, paste0(label, "\n***"), label))
+d <- d %>% mutate(label = ifelse(P < 0.05 & P >= 0.01, paste0(label, "\n**"), label))
+d <- d %>% mutate(label = ifelse(P < 0.1 & P >= 0.05, paste0(label, "\n*"), label))
+
+d$X1 = factor(d$X1, nm)
+d$X2 = factor(d$X2, rev(nm))
+
+ p <- ggplot(d, aes(X1, X2, fill = R, label = label)) +
+    geom_tile(color = "white") +
+    scale_fill_viridis_c() +
+    geom_text(color = ifelse(d$R > 0.35, "black", "white")) +
+    theme_bw() +
+  xlab("") +
+  ylab("") +
+  coord_equal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  # star interpretation:
+  labs(caption = "Significance levels: * p < 0.1, ** p < 0.05, *** p < 0.01")
+ 
+ # return the plot:
+ return(p)
+       }
+
+
+a <- create_correlation_plot(correlations)
+a
 ```
 
 The plot shows no significant correlations between PAM or PAM units and the MI. The raw MI shows a small significant correlation with bio-adm, but this effect is not significant in the demo-corrected MI
@@ -154,11 +197,12 @@ The plot shows no significant correlations between PAM or PAM units and the MI. 
 ```{r, fig.width=8, fig.height=8}
 correlations <- cor(donors, use = "pairwise.complete.obs")
 stats <- cor.mtest(donors, conf.level = 0.95)
-corrplot(correlations, method = "color", type = 'upper', p.mat = stats$p, sig.level = 0.05, number.cex=0.75, addCoef.col = "black", 
-         col = colorRampPalette(c("red", "white", "forestgreen"))(100))
+
+b <- create_correlation_plot(correlations)
+b
 ```
 
-Here, we do find a few significant correlations. More specifically, PAM units (according to Jip: the key PAM activity marker) are negatively correlated with MI and with corrected MI. This means that higher PAM activity is associated with lower memory performance. This is in line with the literature, as PAM is often associated with vascular health and inflammation, which are known to negatively affect cognitive function.
+Here, we do find a few correlations that are near significance. More specifically, PAM units (according to Jip: the key PAM activity marker) seem to be negatively correlated with MI and with corrected MI. This means that higher PAM activity is associated with lower memory performance. This is in line with the literature, as PAM is often associated with vascular health and inflammation, which are known to negatively affect cognitive function. In addition, pam level seems to be negatively correlated with the corrected MI.
 
 Let's create a scatter plot to visualize this relationship:
 ```{r}
@@ -184,11 +228,12 @@ We see that there is a negative trend, but there are only 80 observations (for w
 # recipients
 correlations <- cor(recipients, use = "pairwise.complete.obs")
 stats <- cor.mtest(recipients, conf.level = 0.95)
-corrplot(correlations, method = "color", type = 'upper', p.mat = stats$p, sig.level = 0.05, number.cex=0.75, addCoef.col = "black", 
-         col = colorRampPalette(c("red", "white", "forestgreen"))(100))
+
+c <- create_correlation_plot(correlations)
+c
 ```
 
-For recipients, we find no significant correlations between PAM or PAM units and the MI. There is a significant correlation between bio-ADM and the raw MI, but this effect is not significant in the demo-corrected MI.
+For recipients, we find no significant correlations between PAM or PAM units and the MI. There is a significant correlation between bio-ADM and the raw MI.
 
 # Time since lab
 
@@ -202,8 +247,11 @@ pam$years_elapsed <- round(pam$days_elapsed / 365)
 
 Let's look at the relationship between PAM activity and time since the lab measurements were taken, for PAM activity.
 ```{r}
+# contrast code group:
+pam$group <- factor(pam$group, levels = c("donor", "receiver"))
+pam$group_contrast <- ifelse(pam$group == "donor", 1, -1)
 # raw memory index:
-m1 <- lm(pam_units_edta ~ mi_raw * group * years_elapsed, data = pam)
+m1 <- lm(pam_units_edta ~ mi_raw * group_contrast * years_elapsed, data = pam)
 summary(m1)
 ```
 
@@ -211,7 +259,7 @@ The first model shows that there is an effect of MI on the PAM activity. We also
 
 Next, we see if we can predict the memory index using PAM activity:
 ```{r}
-m2 <- lm(mi_raw ~ pam_units_edta * group * years_elapsed, data = pam)
+m2 <- lm(mi_raw ~ pam_units_edta * group_contrast * years_elapsed, data = pam)
 summary(m2)
 ```
 The effects are the qualitatively similar, but weaker. 
@@ -220,7 +268,7 @@ Next, we will do the same for the MI score that was corrected age, education, ge
 
 ```{r}
 # demo corrected memory index:
-m3 <- lm(pam_units_edta ~ mi_demo_corrected * group * years_elapsed, data = pam)
+m3 <- lm(pam_units_edta ~ mi_demo_corrected * group_contrast * years_elapsed, data = pam)
 summary(m3)
 ```
 
@@ -228,7 +276,7 @@ The effect of the MI on PAM activity is not significant anymore, and the effect 
 
 Run the model with MI as dependent variable:
 ```{r}
-m4 <- lm(mi_demo_corrected ~ pam_units_edta * group * years_elapsed, data = pam)
+m4 <- lm(mi_demo_corrected ~ pam_units_edta * group_contrast * years_elapsed, data = pam)
 summary(m4)
 ```
 
@@ -295,7 +343,10 @@ m7 <- lm(mi_demo_corrected ~ pam_units_edta, data = pam %>% filter(group == 'don
 summary(m7)
 ```
 
-The raw MI is significant, the corrected MI is nearly significant.
+The raw MI is significant, the corrected MI is not.
+
+
+
 
 
 
