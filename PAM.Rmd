@@ -1,0 +1,301 @@
+---
+title: "PAM"
+author: "Thomas Wilschut"
+date: "2025-01-27"
+output:
+  html_document:
+    smart: true
+    toc: true
+    toc_float: true
+    code_folding: hide
+    number_sections: true
+  pdf_document:
+    toc: true
+---
+
+```{r setup, include=FALSE} 
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+
+```{r}
+# Load packages:
+library(ggplot2)
+library(dplyr)
+library(lubridate)
+library(patchwork)
+library(ggcorrplot)
+library(tidyr)
+library(purrr)
+library(psych)
+library(lme4)
+library(ggsignif)
+library(glmnet)
+library(knitr)
+library(corrplot)
+library(kableExtra)
+library(readxl)
+```
+
+# 1 Load data
+```{r}
+dat <- read.csv('data/processed/summary_dat_corrected_mi')
+pam <- read.csv('data/processed/uitdraai_pam.csv', sep = ';')
+
+# Create a new participant id to merge the. If group is 'Recipient', this will be TR0xxxx, with the last three or four digits being the rec_id.
+# If group is 'Donor', this will be TD0xxxx, with the last three or four digits being the dnr_id:
+
+pam$rec_id <- ifelse(pam$group == "Recipient", paste0("TR0", pam$rec_id), paste0("TD0", pam$dnr_id))
+
+# if the number of digits is after the letters is four (e.g., TR0644) we need to add a 0, e.g., TR00644:
+pam$rec_id <- ifelse(nchar(pam$rec_id) == 6, paste0(substr(pam$rec_id, 1, 3), "0", substr(pam$rec_id, 4, 6)), pam$rec_id)
+
+pam$deelnemerid <- pam$rec_id
+
+# merge the data:
+dat <- left_join(dat, pam, by = "deelnemerid")
+
+# take the variables of interest
+pam <- dat %>% dplyr::select(mi_raw, mi_demo_corrected, mi, mi_corrected, pam_edta, pam_units_edta, adm_gly_edta, bio_adm_edta, bmi.y, hba1_p_blo, crp_blo, group.x, age, npotscore15wtdl, nposcorefluencyanimal, nposcoretmta, algdat,)
+
+# rename for clarity:
+colnames(pam)[colnames(pam) == 'bmi.y'] <- 'bmi'
+colnames(pam)[colnames(pam) == 'group.x'] <- 'group'
+
+rm(dat)
+```
+
+Here, we will examine the relationship between levels of PAM (peptidylglycine-α-amidating monooxygenas) and memory function as measured by the MI. From PAM theragnostics website:' PAM enzyme is the only known enzyme to catalyze the formation of c‑terminally amidated peptide hormones for gaining their biological activity. Already several decades ago, the connection between the diverse human pathologies and the level of α-amidation has been made. Thus, the increase of the PAM amidating activity could be directly linked to the presence or potential development of the medullary thyroid carcinoma, neuroendocrine and pancreatic endocrine tumors, insulin induced hypoglycemia, type 2 diabetes, multiple sclerosis, post-polio syndrome, diverse neural disfunction (Bousquet-Moore et al., 2010), hypertension (Shimosawa et al., 2000), Alzheimer´s disease (Wand et al. 1987) and many others.' This means that we would expect a negative relationship between PAM levels and memory function.
+
+The following variables of interest are available in the dataset:
+
+* pam_edta: measured concentration of PAM in plasma samples collected using EDTA (a type of anticoagulant) in ng/mL (nanograms per milliliter).
+
+* pam_units_edta: PAM activity in plasma samples collected using EDTA. This variable reflects the enzyme's ability to modify peptides and is often used to assess PAM's functional status. According to Jip, this is our main variable of interest.
+
+* adm_gly_edta: concentration of adrenomedullin (ADM) in plasma samples, measured in EDTA plasma. Adrenomedullin is a peptide hormone involved in various physiological processes, including vasodilation (widening of blood vessels), and is commonly studied alongside PAM due to overlapping roles in vascular health and disease.
+
+* bio_adm_edta: biologically active adrenomedullin (bio-ADM) levels in plasma samples, measured in EDTA plasma. Bio-ADM refers to the fraction of adrenomedullin that is biologically functional and capable of exerting its physiological effects (like vasodilation or influencing vascular integrity).
+
+We also have access to variables that usually correlate strongly with vascular health and inflammation: bmi, hba1 and crp.
+
+# Distributions and transformations
+
+Check distributions of PAM, ADM and bio-ADM levels.
+```{r}
+# convert all but group to numeric:
+pam <- pam %>% mutate(across(-c(group, algdat), as.numeric))
+
+ggplot(pam, aes(x = pam_edta)) +
+  geom_histogram(fill = "lightblue", color = "black", bins = 30) +
+  labs(title = "Distribution of PAM levels",
+       x = "PAM levels (ng/ML)",
+       y = "Frequency")
+```
+
+PAM_edta seems normally distributed, so there is no need to transpose.
+
+```{r}
+ggplot(pam, aes(x = pam_units_edta)) +
+  geom_histogram(fill = "lightblue", color = "black", bins = 30) +
+  labs(title = "Distribution of PAM levels",
+       x = "PAM activity",
+       y = "Frequency")
+```
+The same seems to go for the 'PAM_units_edta' variable. Next, we will look at ADM levels:
+
+```{r}
+ggplot(pam, aes(x = adm_gly_edta)) +
+  geom_histogram(fill = "lightblue", color = "black", bins = 30) +
+  labs(title = "Distribution of ADM levels",
+       x = "ADM levels (ng/ML)",
+       y = "Frequency")
+```
+
+ADM is left-skewed, so we will log-transform this variable.
+```{r}
+pam$adm_gly_edta <- log(pam$adm_gly_edta)
+```
+
+Let's also look at bio-ADM:
+```{r}
+ggplot(pam, aes(x = as.numeric(bio_adm_edta))) +
+  geom_histogram(fill = "lightblue", color = "black", bins = 30) +
+  labs(title = "Distribution of bio-ADM levels",
+       x = "Bio-ADM levels (ng/ML)",
+       y = "Frequency")
+```
+
+Bio-ADM is also left-skewed, so we will log-transform this variable as well.
+```{r}
+pam$bio_adm_edta <- log(pam$bio_adm_edta)
+```
+
+# Correlations
+
+Next, we will look at the correlations with MI, across all participants and within the donor and recipient groups separately. 
+
+## All participants
+```{r, fig.width=8, fig.height=8}
+donors <- pam %>% filter (group == 'donor') %>% dplyr::select(-group, -algdat)
+recipients <- pam  %>% filter (group == 'receiver') %>% dplyr::select(-group, -algdat)
+all <- pam %>% dplyr::select(-group, -algdat)
+
+# all
+correlations <- cor(all, use = "pairwise.complete.obs")
+stats <- cor.mtest(all, conf.level = 0.95)
+corrplot(correlations, method = "color", type = 'upper', p.mat = stats$p, sig.level = 0.05, number.cex=0.75,  addCoef.col = "black", 
+         col = colorRampPalette(c("red", "white", "forestgreen"))(100))
+```
+
+The plot shows no significant correlations between PAM or PAM units and the MI. The raw MI shows a small significant correlation with bio-adm, but this effect is not significant in the demo-corrected MI
+
+## Donors
+```{r, fig.width=8, fig.height=8}
+correlations <- cor(donors, use = "pairwise.complete.obs")
+stats <- cor.mtest(donors, conf.level = 0.95)
+corrplot(correlations, method = "color", type = 'upper', p.mat = stats$p, sig.level = 0.05, number.cex=0.75, addCoef.col = "black", 
+         col = colorRampPalette(c("red", "white", "forestgreen"))(100))
+```
+
+Here, we do find a few significant correlations. More specifically, PAM units (according to Jip: the key PAM activity marker) are negatively correlated with MI and with corrected MI. This means that higher PAM activity is associated with lower memory performance. This is in line with the literature, as PAM is often associated with vascular health and inflammation, which are known to negatively affect cognitive function.
+
+Let's create a scatter plot to visualize this relationship:
+```{r}
+ggplot(donors, aes(x = mi_demo_corrected, y = pam_units_edta)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = TRUE) +
+  labs(title = "PAM activity and MI in kidney donors",
+       x = "MI (corrected for age, education, gender)",
+       y = "PAM activity")
+```
+
+How many observations are there?
+
+```{r}
+sum(!is.na(donors$pam_units_edta))
+sum(!is.na(recipients$pam_units_edta))
+```
+
+We see that there is a negative trend, but there are only 80 observations (for which there are PAM unit values and MI scores) for donors, so we need to be careful with our interpretations. 
+
+## Recipients
+```{r, fig.width=8, fig.height=8}
+# recipients
+correlations <- cor(recipients, use = "pairwise.complete.obs")
+stats <- cor.mtest(recipients, conf.level = 0.95)
+corrplot(correlations, method = "color", type = 'upper', p.mat = stats$p, sig.level = 0.05, number.cex=0.75, addCoef.col = "black", 
+         col = colorRampPalette(c("red", "white", "forestgreen"))(100))
+```
+
+For recipients, we find no significant correlations between PAM or PAM units and the MI. There is a significant correlation between bio-ADM and the raw MI, but this effect is not significant in the demo-corrected MI.
+
+# Time since lab
+
+```{r}
+# calculate the days since the lab measuremtns were taken:
+pam$dat <- as.Date(pam$algdat, format = "%m-%d-%Y")
+pam$days_elapsed <- as.numeric(Sys.Date() - pam$dat)
+pam$years_elapsed <- round(pam$days_elapsed / 365)
+```
+
+
+Let's look at the relationship between PAM activity and time since the lab measurements were taken, for PAM activity.
+```{r}
+# raw memory index:
+m1 <- lm(pam_units_edta ~ mi_raw * group * years_elapsed, data = pam)
+summary(m1)
+```
+
+The first model shows that there is an effect of MI on the PAM activity. We also see the inspected interaction between mi and years_elapsed, which is significant. This means that the relationship between PAM activity and MI becomes weaker (i.e., less negative) as the blood test has been completed a longer tome ago.
+
+Next, we see if we can predict the memory index using PAM activity:
+```{r}
+m2 <- lm(mi_raw ~ pam_units_edta * group * years_elapsed, data = pam)
+summary(m2)
+```
+The effects are the qualitatively similar, but weaker. 
+
+Next, we will do the same for the MI score that was corrected age, education, gender:
+
+```{r}
+# demo corrected memory index:
+m3 <- lm(pam_units_edta ~ mi_demo_corrected * group * years_elapsed, data = pam)
+summary(m3)
+```
+
+The effect of the MI on PAM activity is not significant anymore, and the effect of years_elapsed becomes stronger. This seems to suggest that the raw memory index was capturing part of the effect of years_elapsed on PAM activity, while the demo_corrected MI is not capturing this effect.
+
+Run the model with MI as dependent variable:
+```{r}
+m4 <- lm(mi_demo_corrected ~ pam_units_edta * group * years_elapsed, data = pam)
+summary(m4)
+```
+
+We find no significant results anymore. 
+
+
+Let's check for a relationship between age at the moment of MI test, and the years since the lab measurements were taken:
+
+```{r}
+cor.test(pam$age, pam$years_elapsed)
+```
+
+Is there a correlation between PAM activity and the age of the test?
+```{r}
+cor.test(pam$years_elapsed, pam$pam_units_edta)
+ 
+donors <- pam %>% filter(group == 'donor')
+cor.test(donors$years_elapsed, donors$pam_units_edta)
+```
+
+```{r}
+ggplot(pam, aes(x = dat, y = pam_units_edta)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = TRUE) +
+  labs(title = "PAM activity by time since lab measurements",
+       x = "Lab date",
+       y = "PAM activity")
+```
+
+Pam generally seems to increase with time since the lab measurements were taken. There is no evidence for a relationship between age and years_elapsed, but there is a negative correlation between the age of the test and the PAM activity. This correlation is especially strong for donors. That is a bit weird. Did people with higher PAM generally do their test more quickly? 
+
+Let's see if we can visualize the relationship between PAM activity and MI, as a function of the time since the lab measurement, to get a better idea of what is going on.
+
+```{r}
+# create a 'years elapsed group':
+pam$years_elapsed_group <- cut(pam$years_elapsed, breaks = c(0, 4, Inf), labels = c('2-4', '4+'))
+
+a <- ggplot(pam %>% filter (group == 'donor' & !is.na(years_elapsed_group)), aes(x = pam_units_edta, y = mi_raw)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = TRUE) +
+  facet_wrap(~years_elapsed_group) +
+  labs(title = "PAM activity - raw MI by time since lab measurements",
+       x = "PAM activity",
+       y = "Raw MI")
+
+b <- ggplot(pam %>% filter (group == 'donor' & !is.na(years_elapsed_group)), aes(x = pam_units_edta, y = mi_demo_corrected)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = TRUE) +
+  facet_wrap(~years_elapsed_group) +
+  labs(title = "PAM activity - corrected MI by time since lab measurements",
+       x = "PAM activity",
+       y = "Corrected MI")
+
+a / b
+```
+
+It seems like the later measurements show a weaker correlation, both for the corrected MI and the raw MI. Let's run a final model, where we only consider the donors that had their blood drawn 2-4 years ago:
+
+```{r}
+m6 <- lm(mi_raw ~ pam_units_edta, data = pam %>% filter(group == 'donor' & years_elapsed_group == '2-4'))
+summary(m6)
+
+m7 <- lm(mi_demo_corrected ~ pam_units_edta, data = pam %>% filter(group == 'donor' & years_elapsed_group == '2-4'))
+summary(m7)
+```
+
+The raw MI is significant, the corrected MI is nearly significant.
+
+
+
